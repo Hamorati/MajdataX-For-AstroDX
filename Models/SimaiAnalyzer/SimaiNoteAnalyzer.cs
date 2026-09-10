@@ -32,6 +32,8 @@ internal class NoteInfo
     public List<SlideInfo> Slides { get; set; } = new();
     public List<(char C, int Index)> UnknownChars { get; set; } = new();
     public HashSet<char> ExtraModifiers { get; set; } = new();
+    /// <summary>触区锚定 slide 的头部传感区（A-E/C）；普通按钮 note 为 null。</summary>
+    public char? TouchArea { get; set; }
 }
 
 /// <summary>
@@ -52,6 +54,12 @@ internal class SlideInfo
     public int StartIndex { get; set; }
     public int EndIndex { get; set; }
     public bool IsSameHeadChainStart { get; set; }
+    /// <summary>终点是传感区时的传感字母（A-E/C）；按钮终点为 null。</summary>
+    public char? EndTouchArea { get; set; }
+    /// <summary>终点是传感区时的索引（A/B/D/E 为 1-8；C 为 null）。</summary>
+    public int? EndSensorIndex { get; set; }
+    /// <summary>起点是传感区时的传感字母（链上段的传感终点/触区头部）；按钮起点为 null。</summary>
+    public char? StartTouchArea { get; set; }
 }
 
 /// <summary>
@@ -120,9 +128,10 @@ internal static class SimaiNoteAnalyzer
                 else
                 {
                     var separatorIndex = i == contentSpan.Length ? Math.Max(0, i - 1) : i;
-                    context.AddError(
+                    // AstroDX/SimaiSharp 容忍空侧（如 '/4'），MajSimai 亦跳过空 note——仅提示
+                    context.AddWarning(
                         "Missing note between separators",
-                        "EACH '/' and pseudo-EACH '`' separators must have a note on both sides",
+                        "EACH '/' and pseudo-EACH '`' separators should have a note on both sides; the empty side is skipped",
                         startPos.Advance(contentSpan[..separatorIndex]),
                         1
                     );
@@ -139,6 +148,13 @@ internal static class SimaiNoteAnalyzer
     {
         if (content.IsEmpty) return;
         var span = content.Span;
+
+        // 含 slide 形状字符（或 slide code 的 K）→ 走 slide 校验路径（支持触区锚定与传感区顶点）
+        if (HasSlideMark(span))
+        {
+            CheckNoteWithSlides(context, content, startPos);
+            return;
+        }
 
         if (IsTouchNote(span, out var sensorType, out var sensorIndex))
         {
@@ -158,6 +174,78 @@ internal static class SimaiNoteAnalyzer
             startPos,
             content.Length
         );
+    }
+
+    /// <summary>该片段是否含 slide 形状字符（-^v&lt;&gt;Vpqszw 或 slide code 的 K）。</summary>
+    private static bool HasSlideMark(ReadOnlySpan<char> span)
+    {
+        foreach (var c in span)
+        {
+            if (SimaiSymbols.IsSlideChar(c) || c == 'K') return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 含 slide 的 note（按钮锚定或触区锚定）：校验头部合法性、时长括号、修饰符与 slide 链。
+    /// </summary>
+    private static void CheckNoteWithSlides(CheckerContext context, ReadOnlyMemory<char> content, TextPosition startPos)
+    {
+        var span = content.Span;
+
+        if (SimaiSymbols.IsTouchSensorType(span[0]))
+        {
+            // 触区锚定 slide（E3-…、D2-…、Cmf-…）
+            ValidateTouchHead(context, span, startPos);
+        }
+        else if (span[0] is >= '0' and <= '9')
+        {
+            var firstDigit = span[0] - '0';
+            if (firstDigit < 1 || firstDigit > 8)
+            {
+                context.AddError(
+                    $"Invalid button position: {firstDigit}",
+                    "Button position must be between 1 and 8",
+                    startPos,
+                    1
+                );
+                return;
+            }
+        }
+        else
+        {
+            context.AddError(
+                $"Invalid note: '{span.ToString()}'",
+                "Note must start with a button number (1-8) or sensor type (A-E)",
+                startPos,
+                content.Length
+            );
+            return;
+        }
+
+        ValidateDurationBrackets(context, span, startPos);
+        ValidateButtonModifierOccurrences(context, span, startPos);
+        var noteInfo = ParseNoteInfo(content);
+        ValidateNoteInfo(context, span, startPos, noteInfo);
+    }
+
+    /// <summary>
+    /// 校验触区锚定 slide 的头部：A/B/D/E 需 1-8 索引；C 可带可选索引（1/2，与 touch 音符一致）。
+    /// </summary>
+    private static void ValidateTouchHead(CheckerContext context, ReadOnlySpan<char> span, TextPosition startPos)
+    {
+        var area = span[0];
+        if (area == 'C') return;
+
+        if (span.Length < 2 || span[1] is < '1' or > '8')
+        {
+            context.AddError(
+                $"Invalid sensor index for {area}",
+                "Sensor index must be between 1 and 8",
+                startPos,
+                1
+            );
+        }
     }
 
     private static bool IsTouchNote(ReadOnlySpan<char> content, out char sensorType, out int? sensorIndex)
@@ -193,15 +281,7 @@ internal static class SimaiNoteAnalyzer
 
         if (sensorType == 'C')
         {
-            if (sensorIndex.HasValue && sensorIndex.Value != 1 && sensorIndex.Value != 2)
-            {
-                context.AddError(
-                    $"Invalid C sensor index: {sensorIndex.Value}",
-                    "C sensor can only have index 1 or 2 (or no index)",
-                    startPos,
-                    2
-                );
-            }
+            // C 区索引被忽略（C1≡C7≡C，与 SimaiSharp/MajSimai 一致），不校验
         }
         else
         {
@@ -303,9 +383,10 @@ internal static class SimaiNoteAnalyzer
 
         if (durationEnd >= 0 && durationEnd != span.Length - 1)
         {
-            context.AddError(
+            // AstroDX/SimaiSharp 允许时长后跟修饰符（如 B6h[32:1]m），仅提示
+            context.AddWarning(
                 "Modifier after TOUCH HOLD duration",
-                "TOUCH modifiers must be written before the duration bracket",
+                "TOUCH modifiers are usually written before the duration bracket; the modifier still applies",
                 startPos.Advance(span[..(durationEnd + 1)]),
                 span.Length - durationEnd - 1
             );
@@ -461,13 +542,42 @@ internal static class SimaiNoteAnalyzer
     public static NoteInfo ParseNoteInfo(ReadOnlyMemory<char> content)
     {
         var span = content.Span;
-        var info = new NoteInfo
-        {
-            StartPosition = span[0] - '0'
-        };
+        var info = new NoteInfo();
+        var idx = 0;
 
-        var idx = 1;
+        if (span.Length > 0 && SimaiSymbols.IsTouchSensorType(span[0]))
+        {
+            // 触区锚定 slide（E3-…、D2-…、Cmf-…）
+            info.TouchArea = span[0];
+            idx = 1;
+            if (info.TouchArea == 'C')
+            {
+                info.StartPosition = 8;
+                if (idx < span.Length && char.IsDigit(span[idx])) idx++; // C1/C2 索引忽略
+            }
+            else if (idx < span.Length && char.IsDigit(span[idx]))
+            {
+                info.StartPosition = span[idx] - '0';
+                idx++;
+            }
+            else
+            {
+                info.StartPosition = 0; // 缺失索引，由 ValidateNoteInfo 报错
+            }
+        }
+        else if (span.Length > 0)
+        {
+            info.StartPosition = span[0] - '0';
+            idx = 1;
+        }
+        else
+        {
+            info.StartPosition = 0;
+            idx = 1;
+        }
+
         var lastSlideEndPosition = info.StartPosition;
+        var lastEndTouchArea = info.TouchArea;
 
         while (idx < span.Length)
         {
@@ -489,6 +599,7 @@ internal static class SimaiNoteAnalyzer
                     if (slideCodeMatch.EndPosition.HasValue)
                     {
                         lastSlideEndPosition = slideCodeMatch.EndPosition.Value;
+                        lastEndTouchArea = null;
                     }
                     continue;
                 }
@@ -529,6 +640,11 @@ internal static class SimaiNoteAnalyzer
                     break;
                 case 'x':
                     info.IsEx = true;
+                    idx++;
+                    break;
+                case 'f':
+                    // touch 烟花（仅对触区锚定 note 有意义），校验层仅记录
+                    info.ExtraModifiers.Add('f');
                     idx++;
                     break;
                 case 'm':
@@ -624,6 +740,7 @@ internal static class SimaiNoteAnalyzer
                     }
                     idx++;
                     lastSlideEndPosition = info.StartPosition;
+                    lastEndTouchArea = info.TouchArea;
                     info.NextSlideIsSameHeadChainStart = true;
                     break;
                 default:
@@ -635,11 +752,19 @@ internal static class SimaiNoteAnalyzer
                             slideMatch.IsSameHeadChainStart = true;
                             info.NextSlideIsSameHeadChainStart = false;
                         }
+                        slideMatch.StartTouchArea = lastEndTouchArea;
                         info.Slides.Add(slideMatch);
                         idx = slideMatch.EndIndex;
                         if (slideMatch.EndPosition.HasValue)
                         {
                             lastSlideEndPosition = slideMatch.EndPosition.Value;
+                            lastEndTouchArea = null;
+                        }
+                        else if (slideMatch.EndTouchArea != null)
+                        {
+                            // 传感区终点：供下一段起点传播（B6^4、D1v3 等）
+                            lastSlideEndPosition = slideMatch.EndSensorIndex ?? 8;
+                            lastEndTouchArea = slideMatch.EndTouchArea;
                         }
                     }
                     else if (SimaiSymbols.IsButtonModifier(c))
@@ -703,6 +828,27 @@ internal static class SimaiNoteAnalyzer
         {
             slide.EndPosition = span[idx] - '0';
             idx++;
+        }
+        else if (idx < span.Length && SimaiSymbols.IsTouchSensorType(span[idx]))
+        {
+            // 传感区终点（-B6、-C、>E7、^D4 等）
+            var area = span[idx];
+            idx++;
+            slide.EndTouchArea = area;
+            if (area != 'C')
+            {
+                if (idx < span.Length && char.IsDigit(span[idx]))
+                {
+                    slide.EndSensorIndex = span[idx] - '0';
+                    idx++;
+                }
+                // 缺失索引时保持 null，由 ValidateSlide 报错
+            }
+            else
+            {
+                // C 区（C1/C2 索引忽略，与 touch 音符一致）
+                if (idx < span.Length && char.IsDigit(span[idx])) idx++;
+            }
         }
 
         if (idx < span.Length && span[idx] == '[')
@@ -887,12 +1033,26 @@ internal static class SimaiNoteAnalyzer
 
         if (info.IsHold && info.Slides.Count > 0)
         {
-            context.AddError(
+            // 与 MajSimai 解析行为一致：HOLD+SLIDE 组合按 SLIDE 处理（如 8h[1:1]<4[62#2:1]）
+            context.AddWarning(
                 "Note cannot be both HOLD and SLIDE",
-                "A note can only be one type: TAP, HOLD, or SLIDE",
+                "This note will be parsed as a SLIDE (HOLD head is ignored)",
                 startPos,
                 content.Length
             );
+        }
+
+        if (info.TouchArea.HasValue && info.TouchArea != 'C')
+        {
+            if (info.StartPosition < 1 || info.StartPosition > 8)
+            {
+                context.AddError(
+                    $"Invalid sensor index for {info.TouchArea}",
+                    "Sensor index must be between 1 and 8",
+                    startPos,
+                    content.Length
+                );
+            }
         }
 
         // $ 与 @ 互斥（force-star vs no-star），文案取自 SimaiSymbols.ModifierConflicts
@@ -1009,9 +1169,10 @@ internal static class SimaiNoteAnalyzer
         {
             if (info.DurationEnd != content.Length - 1)
             {
-                context.AddError(
+                // AstroDX/SimaiSharp 允许时长后跟修饰符（如 4h[1:4]m、B6h[32:1]m），仅提示
+                context.AddWarning(
                     "Modifier after HOLD duration",
-                    "HOLD modifiers must be written before the duration bracket",
+                    "HOLD modifiers are usually written before the duration bracket; the modifier still applies",
                     startPos.Advance(content[..(info.DurationEnd + 1)]),
                     content.Length - info.DurationEnd - 1
                 );
@@ -1380,24 +1541,16 @@ internal static class SimaiNoteAnalyzer
             return;
         }
 
-        if (slide.EndPosition == null)
+        var isSensorEnd = slide.EndTouchArea != null;
+        var isSensorStart = slide.StartTouchArea != null;
+
+        if (slide.EndPosition == null && !isSensorEnd)
         {
             context.AddError(
                 $"Slide missing end position",
-                $"Slide type '{slide.SlideType}' requires an end position (button 1-8)",
+                $"Slide type '{slide.SlideType}' requires an end position (button 1-8 or sensor area A-E/C)",
                 startPos.Advance(content[..slide.StartIndex]),
                 content.Length
-            );
-            return;
-        }
-
-        if (slide.EndPosition < 1 || slide.EndPosition > 8)
-        {
-            context.AddError(
-                $"Invalid slide end position: {slide.EndPosition}",
-                "End position must be between 1 and 8",
-                startPos.Advance(content[..(slide.StartIndex + slide.SlideType!.Length)]),
-                content.Length - slide.SlideType!.Length
             );
             return;
         }
@@ -1414,25 +1567,57 @@ internal static class SimaiNoteAnalyzer
             return;
         }
 
-        if (slide.SlideType == "v" && slide.StartPosition == slide.EndPosition)
+        if (isSensorEnd)
         {
-            context.AddWarning(
-                "Same-button 'v' SLIDE",
-                "A same-button 'v' SLIDE is supported, but its use is not recommended",
-                startPos.Advance(content[..slide.StartIndex]),
-                Math.Max(1, slide.EndIndex - slide.StartIndex)
-            );
+            // 传感区终点：仅校验索引合法性，不套用按钮间隔/形状规则（与 SimaiSharp 一致）
+            if (slide.EndTouchArea != 'C' &&
+                (!slide.EndSensorIndex.HasValue || slide.EndSensorIndex.Value < 1 || slide.EndSensorIndex.Value > 8))
+            {
+                context.AddError(
+                    $"Invalid sensor index for {slide.EndTouchArea}",
+                    "Sensor index must be between 1 and 8",
+                    startPos.Advance(content[..slide.StartIndex]),
+                    Math.Max(1, slide.EndIndex - slide.StartIndex)
+                );
+            }
         }
-
-        if (!IsValidSlidePath(slide.SlideType!, slide.StartPosition, slide.EndPosition.Value, slide.FlexionPoint))
+        else
         {
-            var detail = GetSlidePathErrorDetail(slide.SlideType!, slide.StartPosition, slide.EndPosition.Value, slide.FlexionPoint);
-            context.AddError(
-                $"Invalid slide path: {slide.StartPosition}{slide.SlideType}{slide.FlexionPoint}{slide.EndPosition}",
-                detail,
-                startPos.Advance(content[..slide.StartIndex]),
-                content.Length
-            );
+            if (slide.EndPosition < 1 || slide.EndPosition > 8)
+            {
+                context.AddError(
+                    $"Invalid slide end position: {slide.EndPosition}",
+                    "End position must be between 1 and 8",
+                    startPos.Advance(content[..(slide.StartIndex + slide.SlideType!.Length)]),
+                    content.Length - slide.SlideType!.Length
+                );
+                return;
+            }
+
+            if (!isSensorStart)
+            {
+                // 传感区起点（B6^4、D1v3 等）：不套用按钮间隔/形状限制（与 SimaiSharp 一致）
+                if (slide.SlideType == "v" && slide.StartPosition == slide.EndPosition)
+                {
+                    context.AddWarning(
+                        "Same-button 'v' SLIDE",
+                        "A same-button 'v' SLIDE is supported, but its use is not recommended",
+                        startPos.Advance(content[..slide.StartIndex]),
+                        Math.Max(1, slide.EndIndex - slide.StartIndex)
+                    );
+                }
+
+                if (!IsValidSlidePath(slide.SlideType!, slide.StartPosition, slide.EndPosition.Value, slide.FlexionPoint))
+                {
+                    var detail = GetSlidePathErrorDetail(slide.SlideType!, slide.StartPosition, slide.EndPosition.Value, slide.FlexionPoint);
+                    context.AddError(
+                        $"Invalid slide path: {slide.StartPosition}{slide.SlideType}{slide.FlexionPoint}{slide.EndPosition}",
+                        detail,
+                        startPos.Advance(content[..slide.StartIndex]),
+                        content.Length
+                    );
+                }
+            }
         }
 
         if (checkDuration && slide.Duration.HasValue)
@@ -1447,7 +1632,7 @@ internal static class SimaiNoteAnalyzer
 
         return slideType switch
         {
-            "-" => interval >= 2,
+            "-" => interval >= 1,
             "^" => interval is 1 or 2 or 3,
             "v" => interval != 4,
             "<" or ">" => true,
@@ -1465,7 +1650,7 @@ internal static class SimaiNoteAnalyzer
     {
         return slideType switch
         {
-            "-" => "Straight slide requires start and end positions to be at least 2 buttons apart",
+            "-" => "Straight slide requires start and end positions to be different buttons (adjacent buttons are allowed, matching AstroDX/SimaiSharp)",
             "^" => "The '^' arc cannot connect the same button or the opposite button",
             "v" => "The 'v' slide cannot connect opposite buttons",
             "V" => flexionPoint == null

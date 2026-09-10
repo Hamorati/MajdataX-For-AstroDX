@@ -104,9 +104,9 @@ public partial class MainWindowViewModel
         SaveEditRecord();
 
         File.Create(Path.Combine(directory, "maidata.txt")).Dispose();
-        var levels = new SimaiChart[7];
-        var metadata = new MutSimaiChartMetadata[7];
-        for (var i = 0; i < 7; i++)
+        var levels = new SimaiChart[8];
+        var metadata = new MutSimaiChartMetadata[8];
+        for (var i = 0; i < 8; i++)
         {
             levels[i] = new SimaiChart(string.Empty, string.Empty, string.Empty, []);
             metadata[i] = new MutSimaiChartMetadata();
@@ -195,8 +195,8 @@ public partial class MainWindowViewModel
 
         await using var maidataStream = new FileStream(maidataPath, FileMode.Open, FileAccess.Read);
         var simaiFile = await SimaiParser.ParseAsync(maidataStream);
-        var metadata = new MutSimaiChartMetadata[7];
-        for (var i = 0; i < 7; i++)
+        var metadata = new MutSimaiChartMetadata[8];
+        for (var i = 0; i < 8; i++)
         {
             var chart = simaiFile.Charts[i];
             metadata[i] = new MutSimaiChartMetadata
@@ -262,7 +262,7 @@ public partial class MainWindowViewModel
     {
         if (CurrentSimaiFile is null) return;
 
-        for (var i = 0; i < 7; i++)
+        for (var i = 0; i < 8; i++)
         {
             var parsedChart = CurrentSimaiFile.Charts[i];
             CurrentSimaiFile.Charts[i] = new SimaiChart(

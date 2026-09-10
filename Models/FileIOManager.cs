@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform.Storage;
 using System;
@@ -21,7 +21,11 @@ class FileIOManager
                 fptype = new FilePickerFileType("Maidata") { Patterns = ["maidata.txt"], MimeTypes = ["text/plain"] };
                 break;
             case FileOpenerType.Track:
-                fptype = new FilePickerFileType("Track") { Patterns = ["track.mp3", "track.ogg"], MimeTypes = ["audio/mpeg", "audio/ogg"] };
+                fptype = new FilePickerFileType("Track")
+                {
+                    Patterns = ["*.mp3", "*.ogg", "*.wav", "*.flac", "*.opus", "*.m4a", "*.aac", "*.wma", "*.aiff"],
+                    MimeTypes = ["audio/mpeg", "audio/ogg", "audio/wav", "audio/x-wav", "audio/flac", "audio/opus", "audio/mp4", "audio/aac", "audio/x-ms-wma", "audio/aiff"]
+                };
                 break;
             case FileOpenerType.Image:
                 fptype = new FilePickerFileType("Image") { Patterns = ["*.jpg", "*.png"], MimeTypes = ["image/jpeg", "image/png"] };

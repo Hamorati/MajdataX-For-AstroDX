@@ -1,6 +1,9 @@
-﻿using MajdataEdit_Neo.Base;
+using MajdataEdit_Neo.Base;
+using MajdataEdit_Neo.Models.TrackUtils;
 using ManagedBass;
 using System;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 
@@ -9,6 +12,9 @@ namespace MajdataEdit_Neo.Models;
 class TrackReader : IDisposable
 {
     private bool _disposed;
+    private int bgmStream = 0;
+    private string? _currentTrackPath;
+    private string? _transcodedWavPath;
 
     public TrackReader()
     {
@@ -25,8 +31,15 @@ class TrackReader : IDisposable
         _disposed = true;
         Bass.StreamFree(bgmStream);
         bgmStream = 0;
+        CleanupTranscoded();
         Bass.Free();
     }
+
+    /// <summary>
+    /// 当前真正可播放的音频路径：非 BASS 原生格式（opus/m4a/aac/wma 等）已用 ffmpeg
+    /// 转码为临时 WAV。推送给播放器（ViewX）时应使用此路径。
+    /// </summary>
+    public string? ResolvedTrackPath => _transcodedWavPath ?? _currentTrackPath;
 
     public void Play(double time)
     {
@@ -49,38 +62,114 @@ class TrackReader : IDisposable
 
     public bool isPlaying { get { return Bass.ChannelIsActive(bgmStream) == PlaybackState.Playing; } }
 
-    int bgmStream = 0;
     public TrackInfo ReadTrack(string dirpath)
     {
-        var useOgg = File.Exists(dirpath + "/track.ogg");
-        var filePath = dirpath + "/track" + (useOgg ? ".ogg" : ".mp3");
+        var filePath = TrackFile.Find(dirpath)
+            ?? throw new Exception(
+                $"找不到 track 音频文件（支持 {string.Join(", ", TrackFile.SupportedExtensions)}）。\nTrack file not found.");
+
         if (bgmStream is not 0)
+        {
             Bass.StreamFree(bgmStream);
-        var bgmDecode = Bass.CreateStream(filePath, 0L, 0L, BassFlags.Decode);
-        bgmStream = Bass.CreateStream(filePath, 0, 0, BassFlags.Prescan);
-        var bgmSample = Bass.SampleLoad(filePath, 0, 0, 1, BassFlags.Default);
+            bgmStream = 0;
+        }
+        CleanupTranscoded();
+        _currentTrackPath = filePath;
+
+        // 优先直接解码；BASS 核心支持 mp3/ogg(Vorbis)/wav/flac/aiff
+        var decodePath = filePath;
+        var bgmDecode = Bass.CreateStream(decodePath, 0L, 0L, BassFlags.Decode);
+        if (bgmDecode == 0)
+        {
+            // 非原生格式或 BASS 无法识别的容器 → ffmpeg 转码为临时 WAV
+            decodePath = TranscodeToWav(filePath);
+            bgmDecode = Bass.CreateStream(decodePath, 0L, 0L, BassFlags.Decode);
+            if (bgmDecode == 0)
+                throw new Exception(
+                    $"音频解码失败（{Bass.LastError}）。\nAudio decode failed: {decodePath}");
+        }
+
+        var bgmSample = 0;
         try
         {
             var songLength = Bass.ChannelBytes2Seconds(bgmDecode, Bass.ChannelGetLength(bgmDecode));
+            bgmSample = Bass.SampleLoad(decodePath, 0, 0, 1, BassFlags.Default);
+            if (bgmSample == 0)
+                throw new Exception(
+                    $"音频采样失败（{Bass.LastError}）。\nAudio sample load failed: {decodePath}");
+
             var bgmInfo = Bass.SampleGetInfo(bgmSample);
             var freq = bgmInfo.Frequency;
             var sampleCount = (long)(songLength * freq * 2);
             var bgmRAW = new short[sampleCount];
             Bass.SampleGetData(bgmSample, bgmRAW);
-            return new TrackInfo(songLength, bgmRAW);
 
+            bgmStream = Bass.CreateStream(decodePath, 0, 0, BassFlags.Prescan);
+            if (bgmStream == 0)
+                throw new Exception(
+                    $"播放流创建失败（{Bass.LastError}）。\nPlayback stream create failed: {decodePath}");
+
+            return new TrackInfo(songLength, bgmRAW);
         }
         catch (Exception e)
         {
             throw new Exception(
-                "mp3/ogg解码失败。\nMP3/OGG Decode fail.\n" + e.Message + Bass.LastError,
+                $"音频解码失败（{Path.GetFileName(filePath)}，{Bass.LastError}）。\n" +
+                "Audio decode fail. 支持的格式: mp3/ogg/wav/flac/aiff（原生）+ opus/m4a/aac/wma（需 ffmpeg）\n" +
+                e.Message,
                 e);
         }
         finally
         {
             Bass.StreamFree(bgmDecode);
-            Bass.SampleFree(bgmSample);
+            if (bgmSample != 0) Bass.SampleFree(bgmSample);
         }
+    }
+
+    /// <summary>用 ffmpeg 把任意音频转码为临时 WAV（44100Hz 双声道 PCM16）。</summary>
+    private string TranscodeToWav(string filePath)
+    {
+        _transcodedWavPath = Path.Combine(Path.GetTempPath(), $"majdata_track_{Guid.NewGuid():N}.wav");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "ffmpeg",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true
+        };
+        foreach (var arg in new[] { "-y", "-i", filePath, "-vn", "-ar", "44100", "-ac", "2", "-acodec", "pcm_s16le", _transcodedWavPath })
+            startInfo.ArgumentList.Add(arg);
+
+        try
+        {
+            using var process = Process.Start(startInfo)
+                ?? throw new Exception("无法启动 ffmpeg。");
+            var errorTask = process.StandardError.ReadToEndAsync();
+            process.WaitForExit();
+            var error = errorTask.GetAwaiter().GetResult();
+            if (process.ExitCode != 0)
+                throw new Exception($"ffmpeg 转码失败: {error}");
+        }
+        catch (Win32Exception)
+        {
+            throw new Exception(
+                $"音频格式 {Path.GetExtension(filePath)} 需要安装 ffmpeg 才能解码。\n" +
+                "请将 ffmpeg 加入 PATH 后重试（mp3/ogg/wav/flac 无需 ffmpeg）。");
+        }
+
+        if (!File.Exists(_transcodedWavPath))
+            throw new Exception("ffmpeg 转码未产出文件。");
+        return _transcodedWavPath;
+    }
+
+    private void CleanupTranscoded()
+    {
+        if (_transcodedWavPath is { } p && File.Exists(p))
+        {
+            try { File.Delete(p); }
+            catch { /* 文件被占用时忽略，留待系统清理 */ }
+        }
+        _transcodedWavPath = null;
     }
 }
 

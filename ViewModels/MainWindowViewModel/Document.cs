@@ -40,7 +40,7 @@ public partial class MainWindowViewModel
     partial void OnSelectedDifficultyChanged(int value) => RefreshFumenDocument();
 
     [ObservableProperty]
-    internal partial MutSimaiChartMetadata[] CurrentChartMetadata { get; set; } = new MutSimaiChartMetadata[7];
+    internal partial MutSimaiChartMetadata[] CurrentChartMetadata { get; set; } = new MutSimaiChartMetadata[8];
 
     [ObservableProperty]
     public partial SimaiChart CurrentChartData { get; set; } = SimaiChart.Empty;
@@ -63,7 +63,7 @@ public partial class MainWindowViewModel
 
     internal readonly TextDocument _fumenDocument = new();
     internal readonly Lock _fumenContentChangedSyncLock = new();
-    readonly string[] _level = new string[7];
+    readonly string[] _level = new string[8];
     float _offset = 0;
 
     public string OriginFumen { get; set; } = string.Empty;
@@ -166,7 +166,7 @@ public partial class MainWindowViewModel
 
     private void InitializeDocument()
     {
-        for (var i = 0; i < 7; i++) CurrentChartMetadata[i] = new MutSimaiChartMetadata();
+        for (var i = 0; i < 8; i++) CurrentChartMetadata[i] = new MutSimaiChartMetadata();
     }
 
     //------methods

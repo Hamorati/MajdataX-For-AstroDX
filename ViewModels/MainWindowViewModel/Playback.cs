@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Messaging;
 using MajdataEdit_Neo.Assets.Langs;
 using MajdataEdit_Neo.Base;
 using MajdataEdit_Neo.Models;
+using MajdataEdit_Neo.Models.TrackUtils;
 using MajdataEdit_Neo.Types;
 using MajdataEdit_Neo.Types.MajSetting;
 using MajdataEdit_Neo.Types.MajWs;
@@ -245,8 +246,12 @@ public partial class MainWindowViewModel
     {
         try
         {
-            var useOgg = System.IO.File.Exists(maidataDir + "/track.ogg");
-            var trackPath = maidataDir + "/track" + (useOgg ? ".ogg" : ".mp3");
+            var trackPath = _trackReader.ResolvedTrackPath ?? TrackFile.Find(maidataDir);
+            if (trackPath is null)
+            {
+                Debug.WriteLine($"Failed to load editor: no track file in {maidataDir}");
+                return;
+            }
 
             var bgPath = maidataDir + "/bg.jpg";
             if (!System.IO.File.Exists(bgPath)) bgPath = maidataDir + "/bg.png";

@@ -48,7 +48,7 @@
 					MaterialOpacity="0.75" />
 			</ExperimentalAcrylicBorder.Material>
 		</ExperimentalAcrylicBorder>
-		<Grid RowDefinitions="20,100,*,60,100,20"
+		<Grid RowDefinitions="20,100,*,60,170,20"
 			  ColumnDefinitions="5,60,60,*" ZIndex="5" IsVisible="{Binding IsLoaded}">
 			<Menu Grid.Row="0" Grid.ColumnSpan="4">
 				<MenuItem Header="{local:I18N Gui_File}" >
@@ -115,6 +115,7 @@
 					<ComboBoxItem Content="MASTER" />
 					<ComboBoxItem Content="Re:MASTER" />
 					<ComboBoxItem Content="ORIGINAL" />
+					<ComboBoxItem Content="UTAGE" />
 				</ComboBox>
 
 				<DockPanel Margin="0 8 0 0">
@@ -184,7 +185,7 @@
 
 
 			<controls:SimaiVisualizerControl Name="SimaiVisual"
-											 Height="100" Grid.Row="4" Grid.ColumnSpan="4"
+											 Height="170" Grid.Row="4" Grid.ColumnSpan="4"
 											 Time="{Binding TrackTime}" TrackIf="{Binding SongTrackInfo}"
 											 ZoomLevel="{Binding TrackZoomLevel}" SimaiChart="{Binding CurrentChartData}"
 											 Offset="{Binding Offset}" CaretTime="{Binding CaretTime}"

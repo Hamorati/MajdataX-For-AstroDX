@@ -41,13 +41,16 @@ public static class TrackProcessor
         if (Math.Abs(diff) < 0.01) return true;
 
         var ext = Path.GetExtension(filePath).ToLowerInvariant();
-        var isAudio = ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".flac";
+        var isAudio = ext is ".mp3" or ".wav" or ".ogg" or ".flac" or ".opus" or ".m4a" or ".aac" or ".wma" or ".aiff";
         var audioCodec = ext switch
         {
             ".mp3" => "libmp3lame",
             ".ogg" => "libvorbis",
             ".wav" => "pcm_s16le",
             ".flac" => "flac",
+            ".opus" => "libopus",
+            ".m4a" or ".aac" => "aac",
+            ".wma" => "wmav2",
             _ => "aac"
         };
 

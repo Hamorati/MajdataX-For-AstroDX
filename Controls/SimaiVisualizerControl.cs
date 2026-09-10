@@ -647,6 +647,21 @@ class SimaiVisualizerControl : Control
                                         canvas.DrawLine(x - rad, y, x + rad, y, paint);
                                     }
                                 }
+                                else if (noteD.IsSensorSlide && noteD.TouchArea != ' ')
+                                {
+                                    // 触区锚定 slide：头部画 Touch 方块 + 内部星形（与 ViewX 特殊皮肤一致）
+                                    paint.StrokeWidth = 2;
+                                    paint.Color = noteD.IsMine ? (noteD.IsBreak ? MineBreakColor : MineColor) :
+                                                  isEach ? EachColor : TouchColor;
+                                    canvas.DrawRect(x - 2.5f, y - 2.5f, 7, 7, paint);
+                                    paint.StrokeWidth = 1f;
+                                    var rad = 2.2f;
+                                    var rad2 = rad * 1.414f / 2f;
+                                    canvas.DrawLine(x - rad2, y - rad2, x + rad2, y + rad2, paint);
+                                    canvas.DrawLine(x + rad2, y - rad2, x - rad2, y + rad2, paint);
+                                    canvas.DrawLine(x, y - rad, x, y + rad, paint);
+                                    canvas.DrawLine(x - rad, y, x + rad, y, paint);
+                                }
 
                                 paint.StrokeWidth = 3.5f;
                                 paint.Color = noteD.IsMineSlide ? MineSlideColor :
@@ -665,6 +680,15 @@ class SimaiVisualizerControl : Control
                                 break;
                         }
                     }
+                }
+
+                // 圆形触区面板：显示当前时间附近的传感区 slide 真实轨迹（touchspace 布局）
+                var activeSensorSlide = FindActiveSensorSlide(_simaiChart.NoteTimings, currentTime - _offset);
+                if (activeSensorSlide is not null)
+                {
+                    var slideProgress = (currentTime - _offset - activeSensorSlide.SlideStartTime) /
+                                        Math.Max(activeSensorSlide.SlideTime, 0.001);
+                    TouchSpacePanel.Draw(canvas, new SKPoint((float)width - 88, 88), 70f, activeSensorSlide, slideProgress);
                 }
 
                 time = _caretTime + _offset;
@@ -691,5 +715,22 @@ class SimaiVisualizerControl : Control
         context.Custom(new CustomDrawOp(new Rect(0, 0, Bounds.Width, Bounds.Height),
             TrackIf, Time, ZoomLevel, SimaiChart ?? EmptyChart, Signatures ?? [], Offset, CaretTime,
             IsAnimated, _animationState, _renderCache, RequestNextAnimationFrame));
+    }
+
+    /// <summary>查找当前时间窗口内的传感区 slide（圆形面板显示用）。</summary>
+    private static SimaiNote? FindActiveSensorSlide(ReadOnlySpan<SimaiTimingPoint> noteTimings, double chartTime)
+    {
+        foreach (var timing in noteTimings)
+        {
+            foreach (var note in timing.Notes)
+            {
+                if (note.IsSensorSlide && note.Type == SimaiNoteType.Slide &&
+                    chartTime >= note.SlideStartTime && chartTime <= note.SlideStartTime + note.SlideTime)
+                {
+                    return note;
+                }
+            }
+        }
+        return null;
     }
 }

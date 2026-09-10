@@ -139,8 +139,12 @@ public partial class MainWindowViewModel
             var beatsCount = MediaQuickProcessBeatsCount; var freezeFrame = MediaQuickProcessFreezeFrame;
             if (!await EnsureFFmpeg()) return;
             var maidataDir = MaidataDir;
-            var audioPath = Path.Combine(maidataDir, "track.mp3");
-            if (!File.Exists(audioPath)) audioPath = Path.Combine(maidataDir, "track.ogg");
+            var audioPath = TrackFile.Find(maidataDir);
+            if (audioPath is null)
+            {
+                Debug.WriteLine("MediaQuickProcess: no track audio found");
+                return;
+            }
             operation = BeginFfmpegOperation();
             ShowStatusMessage($"{Langs.Status_Processing}");
             var completed = await Task.Run(() =>
